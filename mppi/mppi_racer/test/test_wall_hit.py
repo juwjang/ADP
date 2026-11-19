@@ -22,3 +22,14 @@ def test_penalty_when_body_crosses_boundary_both_sides():
 
 def test_default_flag_is_off():
     assert MPPIParams().wall_hit_w == 0.0
+
+
+def test_obs_inflate_extends_collision_box_and_default_is_unchanged():
+    ahead = np.array([[-0.1, -0.1]]); behind = np.array([[-0.5, -0.5]])
+    gap_d = np.array([[[0.10], [0.30]]]).reshape(1, 2, 1)
+    a = ahead[..., None]; b = behind[..., None]
+    base = costs.obstacle_cost(a, b, gap_d, 0.4, 0.4, 1000.0, 30.0)
+    assert np.all(base < 1000.0)          # 기본: 옆 여유가 양수면 충돌 아님
+    infl = costs.obstacle_cost(a, b, gap_d, 0.4, 0.4, 1000.0, 30.0, inflate=0.15)
+    assert infl[0, 0] >= 1000.0 and infl[0, 1] < 1000.0   # 0.10 m 여유는 부풀린 박스 안, 0.30 m는 밖
+    assert np.array_equal(base, costs.obstacle_cost(a, b, gap_d, 0.4, 0.4, 1000.0, 30.0, inflate=0.0))

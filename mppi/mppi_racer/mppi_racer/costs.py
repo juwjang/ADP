@@ -60,10 +60,10 @@ def obstacle_gaps(s, d, t, obstacles, track, half_width, half_length):
     return ahead, behind, gap_d
 
 
-def obstacle_cost(ahead, behind, gap_d, margin_s, margin_d, w_collision, w_near):
+def obstacle_cost(ahead, behind, gap_d, margin_s, margin_d, w_collision, w_near, inflate=0.0):
     """충돌은 큰 고정 페널티, 근접은 옆 여유가 줄수록 커지는 장벽. 장애물에 대해 합한다."""
     gap_s = np.maximum(ahead, behind)
-    collision = (gap_s < 0.0) & (gap_d < 0.0)
+    collision = (gap_s < inflate) & (gap_d < inflate)   # inflate>0이면 장애물 박스를 사방으로 키운 충돌 판정
     proximity = np.clip(1.0 - gap_d / margin_d, 0.0, 1.0)
     cost = np.where(gap_s < margin_s, w_near * proximity ** 2, 0.0) + w_collision * collision
     return cost.sum(axis=-1)

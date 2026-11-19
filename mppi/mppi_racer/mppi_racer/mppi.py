@@ -45,6 +45,7 @@ class MPPIParams:
     obs_margin_d: float = 0.25
     w_collision: float = 1000.0
     w_near: float = 30.0
+    obs_inflate: float = 0.0       # m, >0이면 충돌 판정 박스를 장애물 사방으로 이만큼 키움(0=기존 동작)
     ttc_threshold: float = 1.5
     w_ttc: float = 20.0
     w_terminal: float = 0.0      # 호라이즌 마지막 스텝의 추종 비용(d, 헤딩)에 곱할 배수. 0이면 기존 동작
@@ -71,6 +72,14 @@ class MPPIParams:
     side_keep: int = 0             # 1이면 한 번 고른 통과 쪽을 유지(히스테리시스)하고 인식에서 사라져도 side_keep_ttl 동안 기억(side_pref_w>0 필요). 0=기존 동작
     side_keep_ttl: float = 1.5     # s
     side_hyst: float = 0.3         # m, 기억한 쪽보다 반대쪽 여유가 이만큼 더 커야 바꿈
+    grp_plan: int = 0              # 1이면 보이는 장애물을 묶어 좌/우 통과 조합을 지도 정보로 계획하고 목표 d 프로파일을 추종 기준선·PP 가이드에 씀(0=기존 동작)
+    grp_range: float = 9.0         # m, 차 앞 이 거리 안의 장애물만 묶음 대상
+    grp_gap: float = 4.0           # m, 장애물 사이 s 간격이 이 이하면 같은 묶음
+    grp_c_pref: float = 0.25       # m, 차체 가장자리와 장애물 사이 선호 여유
+    grp_c_min: float = 0.10        # m, 이보다 좁으면 그 쪽은 불가
+    grp_kappa_max: float = 1.1     # 1/m, 경로 곡률 허용(R_min 0.74 m의 한계 1.35의 약 80%)
+    grp_shift_ay: float = 6.0      # m/s^2, 횡이동에 쓰는 횡가속 허용
+    grp_release: float = 3.0       # m, 묶음을 지난 뒤 기준선으로 복귀하는 거리
     obs_fallback: int = 0         # 1이면 장애물이 보일 때 운동학 모델·기본 잡음으로 되돌림(0=기존 동작)
     obs_yaw_understeer: float = 0.05
     obs_sigma_steer: float = 0.12
@@ -113,6 +122,8 @@ class MPPI:
         self.prev_u = np.zeros(2)
         self._idx = None
         self._obs_mode = False
+        self._grp = None            # grp_plan 결과(없으면 None)
+        self._grp_planner = None
         self._side_mem = []          # side_keep 기억: dict(obs=(6,), sign=±1, t=마지막 관측 시각)
         self._side_obs = np.zeros((0, 6))
         self._side_sign = np.zeros(0)
@@ -136,7 +147,7 @@ class MPPI:
         noise[0] = 0.0
         return noise
 
-    def pp_steering_plan(self, state, steer0, idx0, offset=0.0):
+    def pp_steering_plan(self, state, steer0, idx0, offset=0.0, dref=None):
         """현재 속도를 유지하고 순수 추적(PP)으로 조향하는 닫힌 루프 롤아웃의 조향 명령 열 (horizon,).
 
         offset(m)이 0이 아니면 기준 경로를 왼쪽(+)·오른쪽(-)으로 옮긴 경로를 따라가되, 트랙 경계 안쪽
@@ -152,7 +163,12 @@ class MPPI:
         for t in range(p.horizon):
             li = (idx + ahead) % tr.n
             tx, ty = tr.x[li], tr.y[li]
-            if offset != 0.0:
+            if dref is not None:
+                off = float(np.clip(dref(((li - idx0) % tr.n) * tr.spacing),
+                                    -(tr.d_right[li] - p.half_width - 0.15), tr.d_left[li] - p.half_width - 0.15))
+                tx = tx - tr.sin_psi[li] * off
+                ty = ty + tr.cos_psi[li] * off
+            elif offset != 0.0:
                 off = float(np.clip(offset, -(tr.d_right[li] - p.half_width - 0.15),
                                     tr.d_left[li] - p.half_width - 0.15))
                 tx = tx - tr.sin_psi[li] * off
@@ -252,7 +268,13 @@ class MPPI:
         idx, s, d = self._frenet(traj, idx0)
         yaw, v = traj[:, 1:, 2], traj[:, 1:, 3]
         heading_err = _wrap_angle(yaw - tr.psi[idx])
-        cost = costs.tracking_cost(d, heading_err, p.w_d, p.w_heading)
+        if self._grp is not None:
+            from .group_plan import dref_profile
+            g = self._grp
+            d_trk = d - dref_profile(g["knots_s"], g["knots_d"], tr.s_diff(s, g["car_s"]))
+        else:
+            d_trk = d
+        cost = costs.tracking_cost(d_trk, heading_err, p.w_d, p.w_heading)
         if p.w_terminal > 0.0:
             cost[:, -1] += p.w_terminal * cost[:, -1]
         cost += costs.speed_cost(v, tr.vx[idx], tr.kappa[idx], p.w_speed, p.a_lat_max, p.w_alat,
@@ -271,7 +293,7 @@ class MPPI:
             ahead, behind, gap_d = costs.obstacle_gaps(s, d, t, obstacles, tr,
                                                        p.half_width, p.half_length)
             cost += costs.obstacle_cost(ahead, behind, gap_d, p.obs_margin_s, p.obs_margin_d,
-                                        p.w_collision, p.w_near)
+                                        p.w_collision, p.w_near, p.obs_inflate)
             ttc = costs.time_to_collision(ahead, gap_d, v, obstacles[:, 4], behind=behind)
             if p.side_pref_w > 0.0 and not p.side_keep:
                 targets = costs.side_targets(obstacles, tr, p.half_width, p.obs_margin_d,
@@ -321,8 +343,19 @@ class MPPI:
             steer_now = self.prev_u[0]
         if self._idx is None:
             self._idx = tr.locate(state[0], state[1])
-        i0, _, _ = tr.project(state[:1], state[1:2], np.array([self._idx]))
+        i0, s_car, d_car = tr.project(state[:1], state[1:2], np.array([self._idx]))
         self._idx = int(i0[0])
+        self._grp = None
+        if p.grp_plan and len(obstacles):
+            if self._grp_planner is None:
+                from .group_plan import GroupPlanner
+                self._grp_planner = GroupPlanner(tr, p.half_width, p.grp_range, p.grp_gap, p.grp_c_pref,
+                                                 p.grp_c_min, p.grp_kappa_max, p.grp_shift_ay, p.grp_release)
+            self._grp = self._grp_planner.plan(float(s_car[0]), float(d_car[0]), float(state[3]), obstacles)
+            if self._grp is not None:
+                self._grp["car_s"] = float(s_car[0])
+        elif p.grp_plan and self._grp_planner is not None:
+            self._grp_planner.mem = []
 
         # warm start: 직전 최적 입력열을 한 칸 민다.
         if shift:
@@ -349,7 +382,12 @@ class MPPI:
         n_pp = min(p.samples - 1, int(p.samples * p.pp_fraction))
         if n_pp > 0:
             # 후보 0(직전 계획)은 보존하고, 마지막 n_pp개는 PP 조향 열 + 조향 잡음으로 둔다.
-            pp = self.pp_steering_plan(state, steer_now, self._idx)
+            fn = None
+            if self._grp is not None:
+                from .group_plan import dref_profile
+                g = self._grp
+                fn = lambda sr, g=g: float(dref_profile(g["knots_s"], g["knots_d"], sr))
+            pp = self.pp_steering_plan(state, steer_now, self._idx, dref=fn)
             cand[-n_pp:, :, 0] = pp[None, :] + noise[-n_pp:, :, 0]
         n_off = int(p.samples * p.offset_fraction)
         if n_off > 0 and p.offset_n > 0 and (len(obstacles) or not p.offset_only_obstacles):
