@@ -1,0 +1,23 @@
+diff --git a/utilities/nodes/speed_scaler/speed_scaler/speed_scaler.py b/utilities/nodes/speed_scaler/speed_scaler/speed_scaler.py
+index 832d149..19ac63d 100644
+--- a/utilities/nodes/speed_scaler/speed_scaler/speed_scaler.py
++++ b/utilities/nodes/speed_scaler/speed_scaler/speed_scaler.py
+@@ -1,4 +1,5 @@
+ import rclpy
++from copy import deepcopy
+ from rcl_interfaces.msg import ParameterType, ParameterDescriptor, FloatingPointRange
+ from rclpy.node import Node
+ from f110_msgs.msg import WpntArray
+@@ -44,9 +45,9 @@ class SpeedScaler(Node):
+         self.glb_wpnts_sp_og = data
+ 
+     def scale(self, wpnts: WpntArray, limit: float) -> WpntArray:
+-        scaled = WpntArray()
+-        scaled.header = wpnts.header
+-        scaled.wpnts = list(wpnts.wpnts)
++        # Keep the received reference immutable across timer callbacks and
++        # stop/resume changes. Copying only the list aliases each Wpnt message.
++        scaled = deepcopy(wpnts)
+         for wpnt in scaled.wpnts:
+             wpnt.vx_mps = wpnt.vx_mps * limit
+         return scaled
