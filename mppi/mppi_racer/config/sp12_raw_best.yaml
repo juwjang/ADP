@@ -1,0 +1,24 @@
+mppi_racer:
+  ros__parameters:
+    bounds_margin: 0.25
+    steer_lpf_alpha: 0.5
+    speed_lookahead_steps: 6
+    k_accel: 2.5
+    k_brake: 6.0
+    pp_fraction: 0.25
+    a_lat_max: 8.0
+    w_speed: 2.0
+    exploration_fraction: 0.2
+    shield_speed: 1.5
+    speed_lookahead_vmin: 1.0
+    w_near: 30.0
+    obs_margin_d: 0.4
+    w_d: 30.0
+    yaw_understeer: 0.0
+    model_st_substeps: 2
+    sigma_curv_gain: 3.0
+    sigma_steer: 0.08
+    sigma_accel: 1.0
+    raw_obstacles: 1
+    raw_confirm_frames: 3
+    raw_min_size: 0.08

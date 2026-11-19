@@ -1,0 +1,37 @@
+<launch>
+    <!--
+        MPPI 통합 플래너·제어기 (head_to_head_launch.xml 대신 실행).
+        state machine, spline planner, controller manager는 띄우지 않고 mppi_racer가 /drive를 직접 발행한다.
+        perception은 head_to_head_launch.xml과 같은 설정으로 띄운다.
+        실행 순서: base_system_launch.xml, mppi_launch.xml, race_manager_launch.xml
+    -->
+    <arg name="samples" default="1024" />
+    <arg name="control_rate" default="40.0" />
+    <arg name="seed" default="0" />
+    <arg name="log_path" default="" />
+    <arg name="profile_path" default="" />
+    <arg name="blas_threads" default="1" />
+    <arg name="a_lat_max" default="6.0" />
+    <arg name="exploration_fraction" default="0.0" />
+
+    <node pkg="mppi_racer" exec="mppi_racer" name="mppi_racer" output="screen">
+        <env name="OPENBLAS_NUM_THREADS" value="$(var blas_threads)" />
+        <env name="OMP_NUM_THREADS" value="$(var blas_threads)" />
+        <env name="MKL_NUM_THREADS" value="$(var blas_threads)" />
+        <param name="samples" value="$(var samples)" />
+        <param name="control_rate" value="$(var control_rate)" />
+        <param name="seed" value="$(var seed)" />
+        <param name="log_path" value="$(var log_path)" />
+        <param name="profile_path" value="$(var profile_path)" />
+        <param name="a_lat_max" value="$(var a_lat_max)" />
+        <param name="exploration_fraction" value="$(var exploration_fraction)" />
+    </node>
+
+    <!-- PERCEPTION -->
+    <include file="$(find-pkg-share perception)/launch/perception_launch.xml">
+        <arg name="param_file" value="$(find-pkg-share stack_master)/config/opponent_tracker_params.yaml" />
+    </include>
+    <include file="$(find-pkg-share perception_cpp)/launch/perception_launch.xml">
+        <arg name="param_file" value="$(find-pkg-share stack_master)/config/opponent_tracker_params_cpp.yaml" />
+    </include>
+</launch>
