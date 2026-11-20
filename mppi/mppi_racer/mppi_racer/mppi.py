@@ -80,6 +80,14 @@ class MPPIParams:
     grp_kappa_max: float = 1.1     # 1/m, 경로 곡률 허용(R_min 0.74 m의 한계 1.35의 약 80%)
     grp_shift_ay: float = 6.0      # m/s^2, 횡이동에 쓰는 횡가속 허용
     grp_release: float = 3.0       # m, 묶음을 지난 뒤 기준선으로 복귀하는 거리
+    grp_clip: int = 0              # 1이면 전환 경로 전체를 벽 여유 안으로 제한(전환 시작 지연, 불가 조합 탈락). 0=기존 grp_plan
+    grp_clip_margin: float = 0.10  # m, 차 중심이 벽 접촉 한계에서 떨어질 최소 거리
+    grp_switch: int = 0            # 1이면 기억된 쪽이 크게 불리할 때(비용 차 > grp_switch_margin) 기억을 버리고 재선택
+    grp_switch_margin: float = 2.0
+    grp_clearance: int = 0         # 1이면 조합 비용에 전환 경로 전체 최소 여유 부족 벌점(큰 가중)을 더한다
+    grp_cl_thr: float = 0.15       # m
+    grp_cl_w: float = 1000.0       # 여유 부족 1 m당 비용
+    grp_switch_lock: float = 0.0   # m, 기억된 쪽의 장애물이 이 거리 안이면 쪽 전환 금지(진동 방지). 0=잠금 없음
     obs_fallback: int = 0         # 1이면 장애물이 보일 때 운동학 모델·기본 잡음으로 되돌림(0=기존 동작)
     obs_yaw_understeer: float = 0.05
     obs_sigma_steer: float = 0.12
@@ -350,7 +358,11 @@ class MPPI:
             if self._grp_planner is None:
                 from .group_plan import GroupPlanner
                 self._grp_planner = GroupPlanner(tr, p.half_width, p.grp_range, p.grp_gap, p.grp_c_pref,
-                                                 p.grp_c_min, p.grp_kappa_max, p.grp_shift_ay, p.grp_release)
+                                                 p.grp_c_min, p.grp_kappa_max, p.grp_shift_ay, p.grp_release,
+                                                 clip=p.grp_clip, clip_margin=p.grp_clip_margin,
+                                                 switch=p.grp_switch, switch_margin=p.grp_switch_margin,
+                                                 switch_lock=p.grp_switch_lock,
+                                                 clearance=p.grp_clearance, cl_thr=p.grp_cl_thr, cl_w=p.grp_cl_w)
             self._grp = self._grp_planner.plan(float(s_car[0]), float(d_car[0]), float(state[3]), obstacles)
             if self._grp is not None:
                 self._grp["car_s"] = float(s_car[0])

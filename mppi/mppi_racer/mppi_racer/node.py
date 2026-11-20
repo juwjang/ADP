@@ -14,6 +14,7 @@ from rclpy.node import Node
 
 from .command import speed_command, SteeringObserver, lowpass, predict_state
 from .mppi import MPPI, MPPIParams
+from .costs import shield_command
 from .raw_confirm import RawConfirmer, merge_obstacles
 from .cond_decel import cond_decel_cap
 from .track import Track
@@ -58,6 +59,7 @@ class MPPIRacer(Node):
         self._moved_time = None
         self._unstick_until = None
         self.shield_stop_dist = self.declare_parameter('shield_stop_dist', 0.0).value
+        self.shield_fix = int(self.declare_parameter('shield_fix', 0).value)
         self.vis_cap_scale = self.declare_parameter('vis_cap_scale', 1.0).value
         self._vis_s = self._vis_v = None
         vis_file = self.declare_parameter('vis_cap_file', '').value
@@ -209,7 +211,8 @@ class MPPIRacer(Node):
         self._last_steer_out = steer_out
         self._last_accel = res.accel
         if res.shield:
-            speed = min(v, self.params.shield_speed)
+            _nl = min(max(int(self.speed_lookahead_steps), 1), len(res.traj) - 1)
+            speed = shield_command(v, max(float(res.traj[_nl, 3]), 0.0), self.params.shield_speed, self.shield_fix)
             if self.shield_stop_dist > 0.0 and len(self.obstacles):
                 # 쉴드 중에도 앞 shield_stop_dist m 안에 같은 차선 장애물이 있으면 완전 정지한다(기본 꺼짐).
                 tr = self.mppi.track

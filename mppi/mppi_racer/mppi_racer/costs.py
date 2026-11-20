@@ -101,6 +101,14 @@ def shield_speed(speed_cmd, min_ttc, ttc_floor, safe_speed):
     return speed_cmd
 
 
+def shield_command(v, v_plan, safe_speed, fix=0):
+    """쉴드 발동 중 속도 명령. fix=0: min(v, safe)(기존, v=0이면 출발 불가). fix=1: 현재 속도 v가 safe 미만이면
+    계획 속도 v_plan까지(최대 safe) 허용해 정지·저속에서 출발할 수 있게 한다. v>=safe이거나 v_plan<=v면 기존과 같다."""
+    if fix and v < safe_speed:
+        return min(safe_speed, max(v, v_plan))
+    return min(v, safe_speed)
+
+
 def lateral_accel_cost(v, steer, wheelbase, a_lat_max, w):
     """차량 자체의 횡가속도 v^2·tan(steer)/L 이 한계를 넘는 양의 제곱 (타이어 한계의 근사)."""
     over = np.maximum(v ** 2 * np.abs(np.tan(steer)) / wheelbase - a_lat_max, 0.0)
