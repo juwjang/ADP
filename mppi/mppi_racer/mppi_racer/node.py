@@ -15,6 +15,7 @@ from rclpy.node import Node
 from .command import speed_command, SteeringObserver, lowpass, predict_state
 from .mppi import MPPI, MPPIParams
 from .costs import shield_command
+from .stuck_release import EscapeConfig, ShieldStuckRelease
 from .raw_confirm import RawConfirmer, merge_obstacles
 from .cond_decel import cond_decel_cap
 from .track import Track
@@ -60,6 +61,28 @@ class MPPIRacer(Node):
         self._unstick_until = None
         self.shield_stop_dist = self.declare_parameter('shield_stop_dist', 0.0).value
         self.shield_fix = int(self.declare_parameter('shield_fix', 0).value)
+        self.shield_stuck_escape = bool(self.declare_parameter('shield_stuck_escape', 0).value)
+        self._stuck_release = None
+        if self.shield_stuck_escape:
+            if self.shield_fix != 0:
+                raise ValueError('shield_stuck_escape requires shield_fix=0')
+            escape_config = EscapeConfig(
+                hold_s=float(self.declare_parameter('escape_hold_s', 2.0).value),
+                stationary_s_max=float(self.declare_parameter('escape_stationary_s_max', 0.05).value),
+                v_max=float(self.declare_parameter('escape_v_max', 0.10).value),
+                accel_min=float(self.declare_parameter('escape_accel_min', 1.0).value),
+                ttc_min=float(self.declare_parameter('escape_ttc_min', 0.08).value),
+                ahead_min=float(self.declare_parameter('escape_ahead_min', 0.40).value),
+                corridor_min=float(self.declare_parameter('escape_corridor_min', 0.40).value),
+                wall_min=float(self.declare_parameter('escape_wall_min', 0.03).value),
+                pred_gap_min=float(self.declare_parameter('escape_pred_gap_min', 0.35).value),
+                speed=float(self.declare_parameter('escape_speed', 0.30).value),
+                speed_min=float(self.declare_parameter('escape_speed_min', 0.10).value),
+                predict_s=float(self.declare_parameter('escape_predict_s', 0.10).value))
+            self._stuck_release = ShieldStuckRelease(
+                escape_config, self.params.half_width, self.params.half_length,
+                self.params.bounds_margin, self.params.wheelbase,
+                self.params.shield_speed, self.params.ttc_floor)
         self.vis_cap_scale = self.declare_parameter('vis_cap_scale', 1.0).value
         self._vis_s = self._vis_v = None
         vis_file = self.declare_parameter('vis_cap_file', '').value
@@ -213,6 +236,7 @@ class MPPIRacer(Node):
         if res.shield:
             _nl = min(max(int(self.speed_lookahead_steps), 1), len(res.traj) - 1)
             speed = shield_command(v, max(float(res.traj[_nl, 3]), 0.0), self.params.shield_speed, self.shield_fix)
+            _escape_forced_stop = False
             if self.shield_stop_dist > 0.0 and len(self.obstacles):
                 # 쉴드 중에도 앞 shield_stop_dist m 안에 같은 차선 장애물이 있으면 완전 정지한다(기본 꺼짐).
                 tr = self.mppi.track
@@ -223,9 +247,24 @@ class MPPIRacer(Node):
                     overlap = (d_car[0] + hw > o[2]) and (d_car[0] - hw < o[3])
                     if overlap and 0.0 < ahead < self.shield_stop_dist:
                         speed = 0.0
+                        _escape_forced_stop = True
                         break
+            if self._stuck_release is not None:
+                tr = self.mppi.track
+                hint = self.mppi._idx
+                if hint is None:
+                    hint = tr.locate(state[0], state[1])
+                _, s_car, d_car = tr.project(state[:1], state[1:2], np.array([hint]))
+                creep = self._stuck_release.consider(
+                    now, state, float(s_car[0]), float(d_car[0]), steer_out,
+                    res.shield, res.accel, res.min_ttc, self.obstacles, tr,
+                    forced_stop=_escape_forced_stop)
+                if creep is not None:
+                    speed = max(speed, creep)
             self._shield_count += 1
         else:
+            if self._stuck_release is not None:
+                self._stuck_release.reset()
             speed = speed_command(v, res.accel, self.k_accel, self.k_brake, self.params.v_max)
             n = int(self.speed_lookahead_steps)
             if n > 0:
@@ -279,6 +318,8 @@ class MPPIRacer(Node):
                 self._first_control = now
             if now - self._first_control < self.start_cap_s:
                 speed = min(speed, self.start_speed_cap)
+        if self._stuck_release is not None:
+            self._stuck_release.observe(speed)
         self.publish(steer_out, speed)
         step_ms = (time.monotonic() - now) * 1000.0
         self._stats.append(step_ms)
